@@ -2,7 +2,7 @@
 const CACHE_NAME = 'lista-compras-v1';
 const URLS_TO_CACHE = [
   '.',
-  'lista.html',
+  'index.html',
   'manifest.json',
   'icon-192x192.png',
   'icon-512x512.png'
