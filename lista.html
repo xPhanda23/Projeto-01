@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lista de Compras Conectada</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#28a745"/>
+    <style>
+        /* Estilos gerais */
+        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 90%; max-width: 500px; }
+        h1, h2 { text-align: center; color: #333; }
+        input { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        button { width: 100%; padding: 12px; border: none; background-color: #28a745; color: white; cursor: pointer; border-radius: 4px; font-size: 16px; margin-bottom: 10px; }
+        button.secondary { background-color: #6c757d; }
+        button.danger { background-color: #dc3545; font-size: 12px; padding: 5px 10px; width: auto; }
+        ul { list-style-type: none; padding: 0; }
+        li { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+        li.comprado { text-decoration: line-through; color: #888; }
+        .view { display: none; } /* Todas as "telas" começam escondidas */
+        .active { display: block; } /* A tela ativa é mostrada */
+        .list-item.active-list { background-color: #e9f5e9; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div id="view-login" class="view active">
+            <h1>Login</h1>
+            <form id="form-login">
+                <input type="email" id="login-email" placeholder="Email" required>
+                <input type="password" id="login-senha" placeholder="Senha" required>
+                <button type="submit">Entrar</button>
+                <button type="button" id="btn-ir-para-cadastro" class="secondary">Não tenho conta, quero me cadastrar</button>
+            </form>
+        </div>
+
+        <div id="view-cadastro" class="view">
+            <h1>Cadastro</h1>
+            <form id="form-cadastro">
+                <input type="text" id="cadastro-nome" placeholder="Nome" required>
+                <input type="email" id="cadastro-email" placeholder="Email" required>
+                <input type="password" id="cadastro-senha" placeholder="Senha" required>
+                <button type="submit">Cadastrar</button>
+                <button type="button" id="btn-ir-para-login" class="secondary">Já tenho conta, quero entrar</button>
+            </form>
+        </div>
+
+        <div id="view-app" class="view">
+            <h2>Minhas Listas</h2>
+            <form id="form-nova-lista" style="display: flex;">
+                <input type="text" id="input-nova-lista" placeholder="Nome da nova lista" style="flex-grow: 1; margin-right: 10px;">
+                <button type="submit">Criar</button>
+            </form>
+            <ul id="listas-de-compras"></ul>
+            <hr>
+            <div id="area-itens" style="display: none;">
+                <h2 id="titulo-lista-ativa"></h2>
+                 <form id="form-novo-item" style="display: flex;">
+                    <input type="text" id="input-novo-item" placeholder="Adicionar item" style="flex-grow: 1; margin-right: 10px;">
+                    <button type="submit">Adicionar</button>
+                </form>
+                <ul id="itens-lista"></ul>
+            </div>
+            <button id="btn-logout" class="danger" style="margin-top: 20px;">Sair (Logout)</button>
+        </div>
+    </div>
+
+<script>
+// ===================================================================================
+// JAVASCRIPT TOTALMENTE REFEITO PARA CONECTAR COM A API
+// ===================================================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+
+    // --- VARIÁVEIS DE ESTADO E REFERÊNCIAS DO DOM ---
+    const API_URL = 'http://localhost:3000/api';
+    let token = localStorage.getItem('token');
+    let listas = [];
+    let listaAtivaId = null;
+
+    const views = {
+        login: document.getElementById('view-login'),
+        cadastro: document.getElementById('view-cadastro'),
+        app: document.getElementById('view-app')
+    };
+
+    const formLogin = document.getElementById('form-login');
+    const formCadastro = document.getElementById('form-cadastro');
+    const btnIrParaCadastro = document.getElementById('btn-ir-para-cadastro');
+    const btnIrParaLogin = document.getElementById('btn-ir-para-login');
+    const btnLogout = document.getElementById('btn-logout');
+
+    const formNovaLista = document.getElementById('form-nova-lista');
+    const inputNovaLista = document.getElementById('input-nova-lista');
+    const ulListas = document.getElementById('listas-de-compras');
+
+    const areaItens = document.getElementById('area-itens');
+    const tituloListaAtiva = document.getElementById('titulo-lista-ativa');
+    const formNovoItem = document.getElementById('form-novo-item');
+    const inputNovoItem = document.getElementById('input-novo-item');
+    const ulItens = document.getElementById('itens-lista');
+
+
+    // --- FUNÇÕES DE CONTROLE DE VISIBILIDADE (TELAS) ---
+    function mostrarView(viewId) {
+        Object.values(views).forEach(view => view.classList.remove('active'));
+        views[viewId].classList.add('active');
+    }
+
+    // --- FUNÇÃO AUXILIAR PARA CHAMADAS DE API ---
+    async function apiFetch(endpoint, options = {}) {
+        const headers = { 'Content-Type': 'application/json', ...options.headers };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+
+        if (response.status === 401 || response.status === 403) {
+            // Token inválido ou expirado, força o logout
+            fazerLogout();
+            return;
+        }
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.mensagem || 'Erro na API');
+        }
+
+        return response.json();
+    }
+
+
+    // --- FUNÇÕES DE RENDERIZAÇÃO ---
+    function renderizarListas() {
+        ulListas.innerHTML = '';
+        listas.forEach(lista => {
+            const li = document.createElement('li');
+            li.textContent = lista.nome_lista;
+            li.dataset.id = lista.id;
+            li.classList.add('list-item');
+            if (lista.id === listaAtivaId) {
+                li.classList.add('active-list');
+            }
+            ulListas.appendChild(li);
+        });
+    }
+    
+    function renderizarItens(itens) {
+        ulItens.innerHTML = '';
+        itens.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = item.nome_item;
+            li.dataset.id = item.id;
+            li.dataset.comprado = item.comprado;
+            if (item.comprado) {
+                li.classList.add('comprado');
+            }
+
+            const btnRemover = document.createElement('button');
+            btnRemover.textContent = 'Remover';
+            btnRemover.className = 'danger';
+            btnRemover.onclick = (e) => {
+                e.stopPropagation(); // Impede que o clique no botão também marque o item
+                removerItem(item.id);
+            };
+
+            li.appendChild(btnRemover);
+            ulItens.appendChild(li);
+        });
+    }
+
+
+    // --- LÓGICA DE NEGÓCIO (CHAMADAS À API) ---
+    async function carregarListas() {
+        try {
+            listas = await apiFetch('/listas');
+            renderizarListas();
+            mostrarView('app');
+        } catch (error) {
+            console.error('Erro ao carregar listas:', error);
+            alert(error.message);
+        }
+    }
+
+    async function selecionarLista(id) {
+        listaAtivaId = id;
+        const listaSelecionada = listas.find(l => l.id === id);
+        tituloListaAtiva.textContent = listaSelecionada.nome_lista;
+        renderizarListas(); // Para atualizar o destaque da lista ativa
+        areaItens.style.display = 'block';
+        try {
+            const itens = await apiFetch(`/listas/${id}/itens`);
+            renderizarItens(itens);
+        } catch (error) {
+            console.error('Erro ao buscar itens:', error);
+            alert(error.message);
+        }
+    }
+
+    async function adicionarItem(nome) {
+        if (!listaAtivaId) return;
+        try {
+            await apiFetch(`/listas/${listaAtivaId}/itens`, {
+                method: 'POST',
+                body: JSON.stringify({ nome_item: nome })
+            });
+            inputNovoItem.value = '';
+            selecionarLista(listaAtivaId); // Recarrega os itens
+        } catch (error) {
+            console.error('Erro ao adicionar item:', error);
+            alert(error.message);
+        }
+    }
+    
+    async function removerItem(id) {
+        try {
+            await apiFetch(`/itens/${id}`, { method: 'DELETE' });
+            selecionarLista(listaAtivaId); // Recarrega os itens
+        } catch (error) {
+            console.error('Erro ao remover item:', error);
+            alert(error.message);
+        }
+    }
+
+    async function alternarStatusItem(id, statusAtual) {
+        try {
+            await apiFetch(`/itens/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ comprado: statusAtual ? 0 : 1 })
+            });
+            selecionarLista(listaAtivaId); // Recarrega os itens
+        } catch (error) {
+            console.error('Erro ao atualizar item:', error);
+            alert(error.message);
+        }
+    }
+
+    // --- AUTENTICAÇÃO E INICIALIZAÇÃO ---
+    async function fazerLogin(email, senha) {
+        try {
+            const data = await apiFetch('/login', {
+                method: 'POST',
+                body: JSON.stringify({ email, senha })
+            });
+            token = data.token;
+            localStorage.setItem('token', token);
+            await carregarListas();
+        } catch (error) {
+            console.error('Erro de login:', error);
+            alert(error.message);
+        }
+    }
+
+    function fazerLogout() {
+        token = null;
+        listaAtivaId = null;
+        listas = [];
+        localStorage.removeItem('token');
+        mostrarView('login');
+    }
+
+    function inicializar() {
+        if (token) {
+            carregarListas();
+        } else {
+            mostrarView('login');
+        }
+    }
+
+
+    // --- EVENT LISTENERS ---
+    btnIrParaCadastro.addEventListener('click', () => mostrarView('cadastro'));
+    btnIrParaLogin.addEventListener('click', () => mostrarView('login'));
+    btnLogout.addEventListener('click', fazerLogout);
+
+    formLogin.addEventListener('submit', (e) => {
+        e.preventDefault();
+        fazerLogin(document.getElementById('login-email').value, document.getElementById('login-senha').value);
+    });
+    
+    formCadastro.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const nome = document.getElementById('cadastro-nome').value;
+        const email = document.getElementById('cadastro-email').value;
+        const senha = document.getElementById('cadastro-senha').value;
+        try {
+            await apiFetch('/usuarios', {
+                method: 'POST',
+                body: JSON.stringify({ nome, email, senha })
+            });
+            alert('Cadastro realizado com sucesso! Faça o login.');
+            mostrarView('login');
+        } catch(error) {
+            console.error('Erro no cadastro:', error);
+            alert(error.message);
+        }
+    });
+
+    formNovaLista.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const nome = inputNovaLista.value;
+        if (!nome) return;
+        try {
+            await apiFetch('/listas', {
+                method: 'POST',
+                body: JSON.stringify({ nome_lista: nome })
+            });
+            inputNovaLista.value = '';
+            carregarListas(); // Recarrega as listas
+        } catch(error) {
+            console.error('Erro ao criar lista:', error);
+            alert(error.message);
+        }
+    });
+
+    ulListas.addEventListener('click', (e) => {
+        if (e.target.tagName === 'LI') {
+            const id = parseInt(e.target.dataset.id);
+            selecionarLista(id);
+        }
+    });
+
+    formNovoItem.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const nome = inputNovoItem.value;
+        if (nome) adicionarItem(nome);
+    });
+
+    ulItens.addEventListener('click', (e) => {
+        if (e.target.tagName === 'LI') {
+            const id = parseInt(e.target.dataset.id);
+            const status = parseInt(e.target.dataset.comprado);
+            alternarStatusItem(id, status);
+        }
+    });
+    
+    // --- PONTO DE PARTIDA ---
+    inicializar();
+
+});
+
+// Não se esqueça do script de registro do Service Worker se quiser manter o PWA
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js');
+    });
+}
+</script>
+</body>
+</html>
